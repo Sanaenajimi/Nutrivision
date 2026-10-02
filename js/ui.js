@@ -1,6 +1,5 @@
 /* ══════════════════════════════════════════
    NUTRIVISION — ui.js
-   Fonctions de rendu DOM (zéro logique métier)
    ══════════════════════════════════════════ */
 
 import { SCORE_COLORS, SCORE_LABELS } from "./data.js";
