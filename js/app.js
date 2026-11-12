@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════
    NUTRIVISION — app.js
-   Pipeline : ViT (classification) + BLIP (description) + parser NLP
-   100% gratuit — Hugging Face Inference API
+   Pipeline : ViT (classification) + ViT-GPT2 (description) + parser NLP
+   100% navigateur — Transformers.js, sans serveur ni clé API
    ══════════════════════════════════════════ */
 
 import { pipeline, env } from
@@ -13,10 +13,6 @@ import {
 } from "./data.js";
 
 import { setStep, showHome, renderResults, showError } from "./ui.js";
-
-/* ── Hugging Face — clé publique  ── */
-const HF_TOKEN = "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"; 
-const HF_BLIP  = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large";
 
 /* ── Config Transformers.js ── */
 env.allowLocalModels = false;
@@ -31,31 +27,32 @@ async function getClassifier() {
   return classifier;
 }
 
-/* ══════════════════════════════════════════
-   BLIP — description visuelle de l'image
-   ══════════════════════════════════════════ */
-async function describeWithBLIP(imageBlob) {
-  const response = await fetch(HF_BLIP, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${HF_TOKEN}`,
-      "Content-Type": "application/octet-stream",
-    },
-    body: imageBlob,
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`BLIP erreur ${response.status}: ${err}`);
+/* ── Singleton captioner (local, sans clé) ── */
+let captioner = null;
+async function getCaptioner() {
+  if (!captioner) {
+    captioner = await pipeline("image-to-text", "Xenova/vit-gpt2-image-captioning");
   }
-
-  const data = await response.json();
-  /* BLIP retourne [{ generated_text: "a bowl with salmon and rice..." }] */
-  return Array.isArray(data) ? data[0]?.generated_text ?? "" : data?.generated_text ?? "";
+  return captioner;
 }
 
 /* ══════════════════════════════════════════
-   PARSER — extrait les ingrédients du texte BLIP
+   CAPTIONING — description visuelle de l'image
+   ══════════════════════════════════════════ */
+async function describeImage(imageFile) {
+  const cap = await getCaptioner();
+  const url = URL.createObjectURL(imageFile);
+  try {
+    /* Retourne [{ generated_text: "a bowl of rice with salmon..." }] */
+    const out = await cap(url, { max_new_tokens: 30 });
+    return out?.[0]?.generated_text ?? "";
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* ══════════════════════════════════════════
+   PARSER — extrait les ingrédients de la description
    ══════════════════════════════════════════ */
 const INGREDIENT_MAP = {
   /* Protéines */
@@ -181,28 +178,28 @@ async function runAnalysis(file) {
     setStep(2);
     const imgB64 = await fileToBase64(file);
 
-    /* Étape 3 — BLIP : description visuelle */
+    /* Étape 3 — Captioning : description visuelle */
     setStep(3);
     let caption      = "";
     let ingredients  = null;
     let nutrition    = null;
     let nutri_score  = NUTRI_SCORE[vitFood] ?? "C";
-    let usedBLIP     = false;
+    let usedCaption  = false;
 
     try {
-      caption     = await describeWithBLIP(file);
-      console.log("[BLIP] Caption:", caption);
+      caption     = await describeImage(file);
+      console.log("[Caption]", caption);
       ingredients = parseIngredients(caption);
       if (ingredients && ingredients.length > 0) {
         nutrition   = nutritionFromIngredients(ingredients);
         nutri_score = nutriScoreFromIngredients(ingredients, vitFood);
-        usedBLIP    = true;
+        usedCaption = true;
       }
-    } catch (blipErr) {
-      console.warn("[BLIP] Fallback:", blipErr.message);
+    } catch (captionErr) {
+      console.warn("[Caption] Fallback:", captionErr.message);
     }
 
-    /* Fallback données locales si BLIP échoue */
+    /* Fallback données locales si le captioning échoue */
     if (!ingredients || ingredients.length === 0) {
       ingredients = INGREDIENTS[vitFood] ?? ["ingrédients variés"];
     }
@@ -210,14 +207,14 @@ async function runAnalysis(file) {
       nutrition = getNutrition(vitFood, 200);
     }
 
-    /* Étape 4 — Construire le nom du plat depuis la caption BLIP */
+    /* Étape 4 — Construire le nom du plat depuis la description */
     setStep(4);
     await new Promise(res => setTimeout(res, 300));
 
-    /* Nom du plat : on garde la caption BLIP si disponible, sinon vitFood */
+    /* Nom du plat : on garde la description si disponible, sinon vitFood */
     let foodName = vitFood;
     if (caption) {
-      /* Nettoyer la caption BLIP : "a photo of a bowl with salmon..." → "Bowl saumon" */
+      /* Nettoyer la description : "a photo of a bowl with salmon..." → "Bowl saumon" */
       const cleaned = caption
         .replace(/^(a photo of |a picture of |an image of |a )/i, "")
         .replace(/\b(photo|picture|image|plate|dish|food)\b/gi, "")
@@ -235,7 +232,7 @@ async function runAnalysis(file) {
       analyse:     buildAnalyse(foodName, nutrition),
       conseil:     CONSEILS[vitFood] ?? "Consommer de façon équilibrée et variée.",
       imgB64,
-      source:      usedBLIP ? "blip" : "local",
+      source:      usedCaption ? "caption" : "local",
     };
 
     renderResults(result);
