@@ -1,7 +1,6 @@
 /* ══════════════════════════════════════════
    NUTRIVISION — app.js
    Pipeline : ViT (classification) + ViT-GPT2 (description) + parser NLP
-   100% navigateur — Transformers.js, sans serveur ni clé API
    ══════════════════════════════════════════ */
 
 import { pipeline, env } from
